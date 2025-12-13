@@ -15,7 +15,13 @@ app = FastAPI(
 # CORS middleware for frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url, "http://localhost:3010"],
+    allow_origins=[
+        settings.frontend_url,
+        "http://localhost:3010",
+        "https://localhost:3010",
+        "https://dev.ecoworks.ca:3010",
+        "https://10.10.10.24:3010",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
