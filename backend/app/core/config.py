@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Ollama (for future LLM integration)
     ollama_base_url: str = "http://localhost:11434"
 
+    # OpenAI API (for cloud Whisper)
+    openai_api_key: str = ""
+
     class Config:
         env_file = ".env"
 

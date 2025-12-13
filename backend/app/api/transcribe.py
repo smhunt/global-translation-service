@@ -30,6 +30,19 @@ class JobCreatedResponse(BaseModel):
     message: str
 
 
+class CostMetricsResponse(BaseModel):
+    audio_duration_seconds: float
+    audio_duration_minutes: float
+    file_size_bytes: int
+    file_size_mb: float
+    processing_time_seconds: float
+    processing_speed_ratio: float
+    cloud_api_cost: float
+    local_compute_cost: float
+    savings: float
+    savings_percentage: float
+
+
 class ProgressResponse(BaseModel):
     job_id: str
     status: str
@@ -40,6 +53,10 @@ class ProgressResponse(BaseModel):
     estimated_remaining: float
     current_text: str
     message: str
+    # Cost estimates during processing
+    estimated_cloud_cost: Optional[float] = None
+    audio_duration_seconds: Optional[float] = None
+    file_size_mb: Optional[float] = None
 
 
 @router.post("/audio", response_model=TranscriptionResponse)
@@ -104,21 +121,30 @@ _pending_audio: dict = {}
 async def start_transcription(
     file: UploadFile = File(...),
     language: Optional[str] = None,
+    provider: Optional[str] = "local",  # "local", "cloud", or "both"
     background_tasks: BackgroundTasks = None,
 ):
     """
     Start an async transcription job and return a job ID.
     Use /progress/{job_id} SSE endpoint to monitor progress.
     """
-    # Validate file type
+    # Validate file type - check by extension if content_type is generic
     valid_types = [
         "audio/mpeg", "audio/mp3", "audio/wav", "audio/wave", "audio/x-wav",
         "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/ogg", "audio/flac",
-        "audio/webm", "video/webm"
+        "audio/webm", "video/webm", "application/octet-stream"
     ]
+    valid_extensions = [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm", ".mp4", ".aac", ".wma"]
 
     content_type = file.content_type or ""
-    if not content_type.startswith("audio/") and content_type not in valid_types:
+    filename = file.filename or ""
+    file_ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+
+    # Allow if content type is valid OR if extension is valid
+    is_valid_type = content_type.startswith("audio/") or content_type in valid_types
+    is_valid_ext = f".{file_ext}" in valid_extensions
+
+    if not is_valid_type and not is_valid_ext:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid file type: {content_type}. Please upload an audio file."
@@ -130,9 +156,14 @@ async def start_transcription(
     if len(audio_data) == 0:
         raise HTTPException(status_code=400, detail="Empty file uploaded")
 
+    # Validate provider
+    valid_providers = ["local", "cloud", "both"]
+    if provider not in valid_providers:
+        provider = "local"
+
     # Create job
     job_id = str(uuid.uuid4())
-    job = whisper_service.create_job(job_id)
+    job = whisper_service.create_job(job_id, file_size_bytes=len(audio_data), provider=provider)
     job.status = "uploading"
 
     # Store audio data and metadata for processing
@@ -140,6 +171,7 @@ async def start_transcription(
         "audio_data": audio_data,
         "filename": file.filename or "audio.wav",
         "language": language,
+        "provider": provider,
     }
 
     return JobCreatedResponse(
@@ -160,6 +192,7 @@ async def run_transcription(job_id: str):
             audio_data=pending["audio_data"],
             filename=pending["filename"],
             language=pending["language"],
+            provider=pending.get("provider", "local"),
         )
     except Exception as e:
         job = whisper_service.get_job(job_id)
@@ -177,13 +210,13 @@ async def stream_progress(job_id: str):
     Server-Sent Events (SSE) endpoint for real-time transcription progress.
     Connect to this endpoint after calling /start to receive progress updates.
     """
-    job = whisper_service.get_job(job_id)
-    if not job:
+    initial_job = whisper_service.get_job(job_id)
+    if not initial_job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_generator():
         # Start transcription if not already running
-        if job.status in ["pending", "uploading"]:
+        if initial_job.status in ["pending", "uploading"]:
             asyncio.create_task(run_transcription(job_id))
 
         while True:
@@ -202,18 +235,57 @@ async def stream_progress(job_id: str):
                 "estimated_remaining": round(progress.estimated_remaining, 1),
                 "current_text": progress.current_text,
                 "message": progress.message,
+                "estimated_cloud_cost": progress.estimated_cloud_cost,
+                "audio_duration_seconds": progress.audio_duration_seconds,
+                "file_size_mb": progress.file_size_mb,
             }
 
-            # If complete, include full result
+            # If complete, include full result with cost metrics
             if progress.status == "complete":
-                job = whisper_service.get_job(job_id)
-                if job and job.result:
-                    data["result"] = {
-                        "text": job.result.text,
-                        "language": job.result.language,
-                        "duration_seconds": job.result.duration,
-                        "confidence": job.result.confidence,
+                completed_job = whisper_service.get_job(job_id)
+                if completed_job and completed_job.result:
+                    result_data = {
+                        "text": completed_job.result.text,
+                        "language": completed_job.result.language,
+                        "duration_seconds": completed_job.result.duration,
+                        "confidence": completed_job.result.confidence,
+                        "provider": completed_job.result.provider,
                     }
+                    # Add cost metrics if available
+                    if completed_job.result.cost_metrics:
+                        cm = completed_job.result.cost_metrics
+                        result_data["cost_metrics"] = {
+                            "audio_duration_seconds": cm.audio_duration_seconds,
+                            "audio_duration_minutes": cm.audio_duration_minutes,
+                            "file_size_bytes": cm.file_size_bytes,
+                            "file_size_mb": cm.file_size_mb,
+                            "processing_time_seconds": cm.processing_time_seconds,
+                            "processing_speed_ratio": cm.processing_speed_ratio,
+                            "cloud_api_cost": cm.cloud_api_cost,
+                            "local_compute_cost": cm.local_compute_cost,
+                            "savings": cm.savings,
+                            "savings_percentage": cm.savings_percentage,
+                        }
+                    # Add comparison data if both providers were used
+                    if completed_job.result.local_result:
+                        lr = completed_job.result.local_result
+                        result_data["local_result"] = {
+                            "text": lr.text,
+                            "language": lr.language,
+                            "processing_time_seconds": lr.processing_time_seconds,
+                            "cost": lr.cost,
+                            "confidence": lr.confidence,
+                        }
+                    if completed_job.result.cloud_result:
+                        cr = completed_job.result.cloud_result
+                        result_data["cloud_result"] = {
+                            "text": cr.text,
+                            "language": cr.language,
+                            "processing_time_seconds": cr.processing_time_seconds,
+                            "cost": cr.cost,
+                            "confidence": cr.confidence,
+                        }
+                    data["result"] = result_data
                 yield f"data: {json.dumps(data)}\n\n"
                 break
 
