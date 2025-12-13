@@ -23,6 +23,7 @@ class TranscriptionStatus(BaseModel):
     model: Optional[str] = None
     device: Optional[str] = None
     message: str
+    cloud_available: bool = False
 
 
 class JobCreatedResponse(BaseModel):
