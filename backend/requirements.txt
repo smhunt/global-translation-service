@@ -9,3 +9,6 @@ aiofiles>=23.2.1
 
 # Whisper transcription
 faster-whisper>=1.0.0
+
+# Redis for job storage
+redis>=5.0.0

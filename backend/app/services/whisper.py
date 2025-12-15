@@ -4,10 +4,11 @@ import asyncio
 import time
 import httpx
 from typing import Optional, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from faster_whisper import WhisperModel
 
 from app.core.config import get_settings
+from app.services.job_storage import get_job_storage
 
 # Pricing constants (per minute)
 OPENAI_WHISPER_PRICE_PER_MINUTE = 0.006  # $0.006/min for OpenAI Whisper API
@@ -102,7 +103,7 @@ class WhisperService:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._jobs = {}
+            cls._instance._jobs = {}  # In-memory cache for active jobs
         return cls._instance
 
     def _get_model(self) -> WhisperModel:
@@ -116,14 +117,98 @@ class WhisperService:
             )
         return self._model
 
+    def _job_to_dict(self, job: TranscriptionJob) -> dict:
+        """Convert job to serializable dict for storage."""
+        data = {
+            "job_id": job.job_id,
+            "status": job.status,
+            "progress": job.progress,
+            "current_segment": job.current_segment,
+            "total_segments": job.total_segments,
+            "start_time": job.start_time,
+            "audio_duration": job.audio_duration,
+            "file_size_bytes": job.file_size_bytes,
+            "current_text": job.current_text,
+            "error": job.error,
+            "provider": job.provider,
+        }
+        # Serialize result if present
+        if job.result:
+            data["result"] = {
+                "text": job.result.text,
+                "language": job.result.language,
+                "duration": job.result.duration,
+                "confidence": job.result.confidence,
+                "provider": job.result.provider,
+            }
+            if job.result.cost_metrics:
+                data["result"]["cost_metrics"] = asdict(job.result.cost_metrics)
+            if job.result.local_result:
+                data["result"]["local_result"] = asdict(job.result.local_result)
+            if job.result.cloud_result:
+                data["result"]["cloud_result"] = asdict(job.result.cloud_result)
+        return data
+
+    def _dict_to_job(self, data: dict) -> TranscriptionJob:
+        """Convert dict from storage to TranscriptionJob."""
+        job = TranscriptionJob(
+            job_id=data["job_id"],
+            status=data.get("status", "pending"),
+            progress=data.get("progress", 0),
+            current_segment=data.get("current_segment", 0),
+            total_segments=data.get("total_segments", 0),
+            start_time=data.get("start_time", 0),
+            audio_duration=data.get("audio_duration", 0),
+            file_size_bytes=data.get("file_size_bytes", 0),
+            current_text=data.get("current_text", ""),
+            error=data.get("error"),
+            provider=data.get("provider", "local"),
+        )
+        # Deserialize result if present
+        if "result" in data and data["result"]:
+            r = data["result"]
+            cost_metrics = None
+            if "cost_metrics" in r and r["cost_metrics"]:
+                cost_metrics = CostMetrics(**r["cost_metrics"])
+            local_result = None
+            if "local_result" in r and r["local_result"]:
+                local_result = ProviderResult(**r["local_result"])
+            cloud_result = None
+            if "cloud_result" in r and r["cloud_result"]:
+                cloud_result = ProviderResult(**r["cloud_result"])
+            job.result = TranscriptionResult(
+                text=r["text"],
+                language=r["language"],
+                duration=r["duration"],
+                confidence=r["confidence"],
+                provider=r.get("provider", "local"),
+                cost_metrics=cost_metrics,
+                local_result=local_result,
+                cloud_result=cloud_result,
+            )
+        return job
+
     def create_job(self, job_id: str, file_size_bytes: int = 0, provider: str = "local") -> TranscriptionJob:
-        """Create a new transcription job."""
+        """Create a new transcription job (sync, stores in memory)."""
         job = TranscriptionJob(job_id=job_id, file_size_bytes=file_size_bytes, provider=provider)
         self._jobs[job_id] = job
         return job
 
+    async def save_job_to_storage(self, job: TranscriptionJob) -> None:
+        """Persist job to storage backend (Redis or memory)."""
+        storage = get_job_storage()
+        await storage.save_job(job.job_id, self._job_to_dict(job))
+
+    async def get_job_from_storage(self, job_id: str) -> Optional[TranscriptionJob]:
+        """Get job from storage backend."""
+        storage = get_job_storage()
+        data = await storage.get_job(job_id)
+        if data:
+            return self._dict_to_job(data)
+        return None
+
     def get_job(self, job_id: str) -> Optional[TranscriptionJob]:
-        """Get a transcription job by ID."""
+        """Get a transcription job by ID (from memory cache)."""
         return self._jobs.get(job_id)
 
     def _calculate_costs(self, audio_duration: float, processing_time: float, file_size_bytes: int, provider: str = "local") -> CostMetrics:
@@ -389,16 +474,22 @@ class WhisperService:
         job.status = "processing"
         job.progress = 5
 
+        # Persist initial state to storage
+        await self.save_job_to_storage(job)
+
         try:
             local_result: Optional[ProviderResult] = None
             cloud_result: Optional[ProviderResult] = None
 
             if provider in ["local", "both"]:
                 local_result = await self.transcribe_local(job, audio_data, filename, language)
+                # Save progress after local transcription
+                await self.save_job_to_storage(job)
 
             if provider in ["cloud", "both"]:
                 job.status = "transcribing_cloud"
                 job.progress = 50 if provider == "both" else 15
+                await self.save_job_to_storage(job)
                 cloud_result = await self.transcribe_cloud(audio_data, filename, language)
 
             # Determine primary result
@@ -432,11 +523,15 @@ class WhisperService:
             job.progress = 100
             job.result = result
 
+            # Persist final state to storage
+            await self.save_job_to_storage(job)
+
             return result
 
         except Exception as e:
             job.status = "error"
             job.error = str(e)
+            await self.save_job_to_storage(job)
             raise
 
     async def transcribe(

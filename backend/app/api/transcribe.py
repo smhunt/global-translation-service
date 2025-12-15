@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.services.whisper import whisper_service
+from app.services.job_storage import get_job_storage
 
 router = APIRouter(prefix="/transcribe", tags=["transcription"])
 
@@ -114,7 +115,7 @@ async def transcribe_audio(
         )
 
 
-# Store for pending audio data (job_id -> audio_data)
+# Fallback in-memory store for development (used when Redis is not available)
 _pending_audio: dict = {}
 
 
@@ -167,13 +168,17 @@ async def start_transcription(
     job = whisper_service.create_job(job_id, file_size_bytes=len(audio_data), provider=provider)
     job.status = "uploading"
 
-    # Store audio data and metadata for processing
-    _pending_audio[job_id] = {
-        "audio_data": audio_data,
+    # Store audio data and metadata for processing (uses Redis if configured)
+    storage = get_job_storage()
+    metadata = {
         "filename": file.filename or "audio.wav",
         "language": language,
         "provider": provider,
     }
+    await storage.save_audio(job_id, audio_data, metadata)
+
+    # Also save job state to storage
+    await whisper_service.save_job_to_storage(job)
 
     return JobCreatedResponse(
         job_id=job_id,
@@ -183,26 +188,30 @@ async def start_transcription(
 
 async def run_transcription(job_id: str):
     """Background task to run transcription."""
-    pending = _pending_audio.get(job_id)
+    storage = get_job_storage()
+    pending = await storage.get_audio(job_id)
     if not pending:
         return
+
+    audio_data, metadata = pending
 
     try:
         await whisper_service.transcribe_with_progress(
             job_id=job_id,
-            audio_data=pending["audio_data"],
-            filename=pending["filename"],
-            language=pending["language"],
-            provider=pending.get("provider", "local"),
+            audio_data=audio_data,
+            filename=metadata.get("filename", "audio.wav"),
+            language=metadata.get("language"),
+            provider=metadata.get("provider", "local"),
         )
     except Exception as e:
         job = whisper_service.get_job(job_id)
         if job:
             job.status = "error"
             job.error = str(e)
+            await whisper_service.save_job_to_storage(job)
     finally:
-        # Clean up pending audio data
-        _pending_audio.pop(job_id, None)
+        # Clean up pending audio data from storage
+        await storage.delete_audio(job_id)
 
 
 @router.get("/progress/{job_id}")

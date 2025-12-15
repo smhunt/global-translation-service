@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     # OpenAI API (for cloud Whisper)
     openai_api_key: str = ""
 
+    # Redis for job storage (production)
+    redis_url: str = "redis://localhost:6379"
+    use_redis: bool = False  # Set to True to enable Redis storage
+    redis_job_ttl: int = 3600  # Job data TTL in seconds (1 hour)
+
     class Config:
         env_file = ".env"
 
