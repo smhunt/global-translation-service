@@ -1,6 +1,7 @@
 import uuid
 import asyncio
 import json
+import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -8,6 +9,9 @@ from typing import Optional
 
 from app.services.whisper import whisper_service
 from app.services.job_storage import get_job_storage
+from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/transcribe", tags=["transcription"])
 
@@ -186,8 +190,8 @@ async def start_transcription(
     )
 
 
-async def run_transcription(job_id: str):
-    """Background task to run transcription."""
+async def run_transcription_async(job_id: str):
+    """Background task to run transcription (async/in-process)."""
     storage = get_job_storage()
     pending = await storage.get_audio(job_id)
     if not pending:
@@ -214,22 +218,73 @@ async def run_transcription(job_id: str):
         await storage.delete_audio(job_id)
 
 
+def dispatch_transcription(job_id: str, filename: str, language: str, provider: str):
+    """
+    Dispatch transcription to either Celery worker or in-process async task.
+    Returns True if dispatched to Celery, False if running in-process.
+    """
+    settings = get_settings()
+
+    if settings.use_celery:
+        # Import Celery task here to avoid circular imports
+        from app.tasks.transcription import transcribe_audio
+        logger.info(f"Dispatching job {job_id} to Celery worker")
+        transcribe_audio.delay(
+            job_id=job_id,
+            filename=filename,
+            language=language,
+            provider=provider,
+        )
+        return True
+    else:
+        # Run in-process using asyncio
+        logger.info(f"Running job {job_id} in-process (Celery disabled)")
+        asyncio.create_task(run_transcription_async(job_id))
+        return False
+
+
 @router.get("/progress/{job_id}")
 async def stream_progress(job_id: str):
     """
     Server-Sent Events (SSE) endpoint for real-time transcription progress.
     Connect to this endpoint after calling /start to receive progress updates.
     """
+    settings = get_settings()
+
+    # Try to get job from memory first, then from storage
     initial_job = whisper_service.get_job(job_id)
+    if not initial_job:
+        # Try loading from storage (for Celery mode or after restart)
+        initial_job = await whisper_service.get_job_from_storage(job_id)
+        if initial_job:
+            # Cache in memory for progress tracking
+            whisper_service._jobs[job_id] = initial_job
+
     if not initial_job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_generator():
         # Start transcription if not already running
         if initial_job.status in ["pending", "uploading"]:
-            asyncio.create_task(run_transcription(job_id))
+            # Get metadata for dispatch
+            storage = get_job_storage()
+            pending = await storage.get_audio(job_id)
+            if pending:
+                _, metadata = pending
+                dispatch_transcription(
+                    job_id=job_id,
+                    filename=metadata.get("filename", "audio.wav"),
+                    language=metadata.get("language"),
+                    provider=metadata.get("provider", "local"),
+                )
 
         while True:
+            # In Celery mode, refresh job from storage periodically
+            if settings.use_celery:
+                updated_job = await whisper_service.get_job_from_storage(job_id)
+                if updated_job:
+                    whisper_service._jobs[job_id] = updated_job
+
             progress = whisper_service.get_progress(job_id)
             if not progress:
                 yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
