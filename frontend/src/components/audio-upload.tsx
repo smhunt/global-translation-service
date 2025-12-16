@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useAuth } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -90,6 +91,7 @@ type Provider = "local" | "cloud" | "both";
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://10.10.10.24:3085";
 
 export function AudioUpload() {
+  const { userId } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -99,6 +101,8 @@ export function AudioUpload() {
   const [progress, setProgress] = useState<ProgressData | null>(null);
   const [provider, setProvider] = useState<Provider>("local");
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [historyAvailable, setHistoryAvailable] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -136,6 +140,51 @@ export function AudioUpload() {
       })
       .catch(() => setCloudAvailable(false));
   }, []);
+
+  // Check if history is available
+  useEffect(() => {
+    fetch(`${API_URL}/api/v1/transcripts/status`)
+      .then((res) => res.json())
+      .then((data: { available: boolean }) => {
+        setHistoryAvailable(data.available);
+      })
+      .catch(() => setHistoryAvailable(false));
+  }, []);
+
+  // Save transcript to history
+  const saveToHistory = useCallback(async (
+    transcriptResult: TranscriptionResult,
+    fileName: string,
+    fileSize: number
+  ) => {
+    if (!userId || !historyAvailable) return;
+
+    try {
+      const response = await fetch(`${API_URL}/api/v1/transcripts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-User-Id": userId,
+        },
+        body: JSON.stringify({
+          file_name: fileName,
+          file_size_bytes: fileSize,
+          audio_duration_seconds: transcriptResult.duration_seconds,
+          text: transcriptResult.text,
+          language: transcriptResult.language,
+          confidence: transcriptResult.confidence,
+          provider: transcriptResult.provider || provider,
+          cost_metrics: transcriptResult.cost_metrics,
+        }),
+      });
+
+      if (response.ok) {
+        setSaved(true);
+      }
+    } catch (err) {
+      console.error("Failed to save transcript:", err);
+    }
+  }, [userId, historyAvailable, provider]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -203,6 +252,7 @@ export function AudioUpload() {
       );
       eventSourceRef.current = eventSource;
 
+      const currentFile = file;
       eventSource.onmessage = (event) => {
         try {
           const data: ProgressData = JSON.parse(event.data);
@@ -212,6 +262,10 @@ export function AudioUpload() {
             setResult(data.result);
             setIsTranscribing(false);
             eventSource.close();
+            // Save to history
+            if (currentFile) {
+              saveToHistory(data.result, currentFile.name, currentFile.size);
+            }
           } else if (data.status === "error") {
             setError(data.message || "Transcription failed");
             setIsTranscribing(false);
@@ -245,6 +299,7 @@ export function AudioUpload() {
     setProgress(null);
     setIsUploading(false);
     setIsTranscribing(false);
+    setSaved(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -542,6 +597,14 @@ export function AudioUpload() {
               {result.provider && (
                 <span className="text-xs bg-muted px-2 py-1 rounded ml-2">
                   {result.provider === "both" ? "Comparison" : result.provider.toUpperCase()}
+                </span>
+              )}
+              {saved && (
+                <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 px-2 py-1 rounded ml-2 flex items-center gap-1">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  Saved
                 </span>
               )}
             </CardTitle>

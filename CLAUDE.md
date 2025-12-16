@@ -58,13 +58,23 @@ npx shadcn@latest add [component-name]
 
 ## API Endpoints
 
+### Core
 - `GET /` - API info
 - `GET /health` - Health check
+
+### Transcription
 - `GET /api/v1/transcribe/status` - Service status (model, cloud availability)
 - `POST /api/v1/transcribe/audio` - Sync transcription (returns result immediately)
 - `POST /api/v1/transcribe/start` - Start async transcription job
 - `GET /api/v1/transcribe/progress/{job_id}` - SSE stream for real-time progress
 - `GET /api/v1/transcribe/job/{job_id}` - Get job status (non-streaming)
+
+### Transcript History (requires Supabase)
+- `GET /api/v1/transcripts/status` - Check if history is available
+- `GET /api/v1/transcripts` - List user's transcripts (paginated)
+- `POST /api/v1/transcripts` - Save a transcript
+- `GET /api/v1/transcripts/{id}` - Get a transcript by ID
+- `DELETE /api/v1/transcripts/{id}` - Delete a transcript
 
 ## Tech Stack
 
@@ -86,9 +96,10 @@ npx shadcn@latest add [component-name]
 - **Provider Comparison**: Side-by-side local vs cloud results
 - **Cost Tracking**: Real-time cost savings calculation
 - **Auth**: Clerk with middleware protection
+- **Transcript History**: Supabase integration for saving/viewing past transcriptions
+- **History Page**: View, expand, and delete past transcripts
 
 ### Planned
-- **Database**: Supabase (Postgres) for transcript history
 - **Export**: SRT/VTT subtitle formats
 
 ## Network Access

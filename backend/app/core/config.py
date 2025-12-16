@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/0"
 
+    # Supabase for transcript history
+    supabase_url: str = ""
+    supabase_key: str = ""  # Use service_role key for backend
+
     class Config:
         env_file = ".env"
 
