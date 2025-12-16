@@ -60,25 +60,36 @@ npx shadcn@latest add [component-name]
 
 - `GET /` - API info
 - `GET /health` - Health check
-- `GET /api/v1/transcribe/status` - Service status
-- `POST /api/v1/transcribe/audio` - Upload audio for transcription
+- `GET /api/v1/transcribe/status` - Service status (model, cloud availability)
+- `POST /api/v1/transcribe/audio` - Sync transcription (returns result immediately)
+- `POST /api/v1/transcribe/start` - Start async transcription job
+- `GET /api/v1/transcribe/progress/{job_id}` - SSE stream for real-time progress
+- `GET /api/v1/transcribe/job/{job_id}` - Get job status (non-streaming)
 
 ## Tech Stack
 
 ### Frontend
 - **Framework**: Next.js 16 with App Router
 - **UI**: shadcn/ui + Tailwind CSS v4
-- **Components**: Button, Card, Input, Textarea (installed)
+- **Auth**: Clerk (sign-in/sign-up with protected routes)
+- **Features**: Drag-drop upload, real-time progress, copy/download transcript
 
 ### Backend
 - **API Server**: FastAPI with Pydantic v2
+- **ASR**: faster-whisper (local) + OpenAI Whisper API (cloud fallback)
+- **Task Queue**: Celery + Redis (optional, for distributed processing)
 - **CORS**: Configured for frontend access
 
-### Planned Integrations
-- **Local Runtime**: Ollama for on-device inference
-- **ASR**: Whisper/Distil-Whisper
-- **Database**: Supabase (Postgres)
-- **Auth**: Clerk
+### Implemented
+- **Local Transcription**: faster-whisper with real-time progress
+- **Cloud Fallback**: OpenAI Whisper API integration
+- **Provider Comparison**: Side-by-side local vs cloud results
+- **Cost Tracking**: Real-time cost savings calculation
+- **Auth**: Clerk with middleware protection
+
+### Planned
+- **Database**: Supabase (Postgres) for transcript history
+- **Export**: SRT/VTT subtitle formats
 
 ## Network Access
 
