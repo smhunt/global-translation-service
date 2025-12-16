@@ -6,6 +6,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 
+// Icons
+const CopyIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+    <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+  </svg>
+);
+
+const CheckIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+
+const DownloadIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" x2="12" y1="15" y2="3" />
+  </svg>
+);
+
 interface CostMetrics {
   audio_duration_seconds: number;
   audio_duration_minutes: number;
@@ -77,8 +99,33 @@ export function AudioUpload() {
   const [progress, setProgress] = useState<ProgressData | null>(null);
   const [provider, setProvider] = useState<Provider>("local");
   const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  const handleCopyToClipboard = useCallback(async () => {
+    if (!result?.text) return;
+    try {
+      await navigator.clipboard.writeText(result.text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  }, [result?.text]);
+
+  const handleDownload = useCallback(() => {
+    if (!result?.text) return;
+    const blob = new Blob([result.text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file ? `${file.name.replace(/\.[^/.]+$/, "")}_transcript.txt` : "transcript.txt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [result?.text, file]);
 
   // Check if cloud is available
   useEffect(() => {
@@ -500,7 +547,31 @@ export function AudioUpload() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Textarea value={result.text} readOnly className="min-h-[150px] resize-none" />
+            <div className="relative">
+              <Textarea value={result.text} readOnly className="min-h-[150px] resize-none pr-24" />
+              <div className="absolute top-2 right-2 flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCopyToClipboard}
+                  className="h-8 px-2"
+                  title="Copy to clipboard"
+                >
+                  {copied ? <CheckIcon /> : <CopyIcon />}
+                  <span className="ml-1 text-xs">{copied ? "Copied!" : "Copy"}</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDownload}
+                  className="h-8 px-2"
+                  title="Download transcript"
+                >
+                  <DownloadIcon />
+                  <span className="ml-1 text-xs">Download</span>
+                </Button>
+              </div>
+            </div>
 
             <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
               {result.language && <span>Language: <strong>{result.language}</strong></span>}
