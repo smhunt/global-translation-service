@@ -32,3 +32,4 @@ npm-debug.log*
 # Testing
 coverage/
 .pytest_cache/
+transcripts.db
