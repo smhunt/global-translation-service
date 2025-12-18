@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
+import { ComparisonResult } from "@/components/comparison-result";
 
 // Icons
 const CopyIcon = () => (
@@ -646,54 +647,6 @@ export function AudioUpload() {
               )}
             </div>
 
-            {/* Comparison Results */}
-            {result.local_result && result.cloud_result && (
-              <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg space-y-4">
-                <h4 className="font-medium text-sm flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-                    <circle cx="9" cy="7" r="4" />
-                    <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                  </svg>
-                  Provider Comparison
-                </h4>
-
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Local Result */}
-                  <div className="p-3 bg-background rounded border">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-sm">Local</span>
-                      <span className="text-xs text-green-600">{formatCost(result.local_result.cost)}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground space-y-1">
-                      <div>Time: {formatTime(result.local_result.processing_time_seconds)}</div>
-                      <div>Confidence: {Math.round(result.local_result.confidence * 100)}%</div>
-                    </div>
-                  </div>
-
-                  {/* Cloud Result */}
-                  <div className="p-3 bg-background rounded border">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-sm">Cloud</span>
-                      <span className="text-xs text-orange-600">{formatCost(result.cloud_result.cost)}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground space-y-1">
-                      <div>Time: {formatTime(result.cloud_result.processing_time_seconds)}</div>
-                      <div>Confidence: {Math.round(result.cloud_result.confidence * 100)}%</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Cost Savings */}
-                <div className="flex justify-between items-center pt-3 border-t border-border">
-                  <span className="text-sm">Cost Difference:</span>
-                  <span className="font-medium text-green-600">
-                    Save {formatCost(result.cloud_result.cost - result.local_result.cost)} with Local
-                  </span>
-                </div>
-              </div>
-            )}
 
             {/* Cost Metrics (non-comparison mode) */}
             {result.cost_metrics && !result.cloud_result && (
@@ -745,6 +698,27 @@ export function AudioUpload() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Comparison Result - shown when both providers were used */}
+      {result && result.local_result && result.cloud_result && (
+        <ComparisonResult
+          localResult={result.local_result}
+          cloudResult={result.cloud_result}
+          audioDuration={result.duration_seconds}
+          onCopy={() => {}}
+          onDownload={(text, provider) => {
+            const blob = new Blob([text], { type: "text/plain" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = file ? `${file.name.replace(/\.[^/.]+$/, "")}_${provider}_transcript.txt` : `${provider}_transcript.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }}
+        />
       )}
     </div>
   );

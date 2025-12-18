@@ -15,3 +15,6 @@ redis>=5.0.0
 
 # Celery for distributed task processing
 celery[redis]>=5.3.0
+
+# Supabase for transcript history
+supabase>=2.0.0
